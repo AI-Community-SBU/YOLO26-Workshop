@@ -19,7 +19,7 @@ def main():
     # You can override from terminal with env vars if you want:
     #   YOLO_EPOCHS=20 YOLO_IMGSZ=416 YOLO_BATCH=8 python 2_train_model.py
     epochs  = int(os.getenv("YOLO_EPOCHS", "10"))
-    imgsz   = int(os.getenv("YOLO_IMGSZ", "416"))   # 640 is heavier on CPU/RAM
+    imgsz   = int(os.getenv("YOLO_IMGSZ", "640"))   # 640 is heavier on CPU/RAM
     batch   = int(os.getenv("YOLO_BATCH", "8"))     # keep small for 8GB RAM
     workers = int(os.getenv("YOLO_WORKERS", "0"))   # 0 is safest in Codespaces
 
