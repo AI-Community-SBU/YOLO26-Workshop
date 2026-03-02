@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>✊✋✌️ RPS Detector</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 2rem;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, #f78166, #d2a8ff, #79c0ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: #8b949e; margin-bottom: 20px; font-size: 0.9rem; }
+  .video-wrap {
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(136, 100, 255, 0.15);
+    border: 2px solid #30363d;
+    max-width: 720px;
+    width: 100%;
+  }
+  video, canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+  }
+  .hud {
+    display: flex;
+    gap: 16px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .hud-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 16px 28px;
+    text-align: center;
+    min-width: 120px;
+  }
+  .hud-card .label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
+  .hud-card .value { font-size: 2rem; font-weight: 700; margin-top: 4px; }
+  .emoji { font-size: 3rem; }
+  .status {
+    margin-top: 16px;
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .status.connected    { background: #0d331e; color: #3fb950; border: 1px solid #238636; }
+  .status.disconnected { background: #3d1a1a; color: #f85149; border: 1px solid #da3633; }
+  .status.connecting   { background: #2a1f00; color: #d29922; border: 1px solid #9e6a03; }
+
+  .color-paper    { color: #79c0ff; }
+  .color-rock     { color: #f78166; }
+  .color-scissors { color: #d2a8ff; }
+
+  .start-btn {
+    margin-top: 16px;
+    padding: 12px 32px;
+    font-size: 1.1rem;
+    font-weight: 700;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    background: linear-gradient(135deg, #238636, #2ea043);
+    color: white;
+    display: none;
+  }
+  .start-btn:hover { filter: brightness(1.15); }
+</style>
+</head>
+<body>
+
+<h1>✊ Rock  ✋ Paper  ✌️ Scissors</h1>
+<p class="subtitle">Show your hand to the camera — YOLO detects it in real-time</p>
+
+<div class="video-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<button class="start-btn" id="startBtn" onclick="startCamera()">📷 Start Camera</button>
+
+<div class="hud">
+  <div class="hud-card">
+    <div class="label">Detected</div>
+    <div class="value emoji" id="detEmoji">—</div>
+  </div>
+  <div class="hud-card">
+    <div class="label">Class</div>
+    <div class="value" id="detClass" style="font-size:1.4rem;">Waiting…</div>
+  </div>
+  <div class="hud-card">
+    <div class="label">Confidence</div>
+    <div class="value" id="detConf">—</div>
+  </div>
+  <div class="hud-card">
+    <div class="label">FPS</div>
+    <div class="value" id="fps">0</div>
+  </div>
+</div>
+
+<div class="status connecting" id="status">⏳ Connecting…</div>
+
+<script>
+const EMOJI = { "Paper": "✋", "Rock": "✊", "Scissors": "✌️" };
+const COLORS = { "Paper": "#79c0ff", "Rock": "#f78166", "Scissors": "#d2a8ff" };
+const video = document.getElementById("video");
+const overlay = document.getElementById("overlay");
+const ctx = overlay.getContext("2d");
+const statusEl = document.getElementById("status");
+const startBtn = document.getElementById("startBtn");
+
+let ws = null;
+let sending = false;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+
+// ── WebSocket ────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    statusEl.textContent = "🟢 Connected";
+    statusEl.className = "status connected";
+    startBtn.style.display = "inline-block";
+  };
+  ws.onclose = () => {
+    statusEl.textContent = "🔴 Disconnected — refreshing…";
+    statusEl.className = "status disconnected";
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (e) => {
+    const { detections } = JSON.parse(e.data);
+    drawDetections(detections);
+    updateHUD(detections);
+    sending = false;
+    frameCount++;
+  };
+}
+
+// ── Camera ───────────────────────────────────────────────────
+async function startCamera() {
+  startBtn.style.display = "none";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+    });
+    video.srcObject = stream;
+    video.onloadedmetadata = () => {
+      overlay.width = video.videoWidth;
+      overlay.height = video.videoHeight;
+      sendLoop();
+    };
+  } catch (err) {
+    statusEl.textContent = "❌ Camera access denied";
+    statusEl.className = "status disconnected";
+    startBtn.style.display = "inline-block";
+  }
+}
+
+// ── Send frames ──────────────────────────────────────────────
+const sendCanvas = document.createElement("canvas");
+const sendCtx = sendCanvas.getContext("2d");
+
+function sendLoop() {
+  if (!sending && ws && ws.readyState === WebSocket.OPEN) {
+    sending = true;
+    sendCanvas.width = video.videoWidth;
+    sendCanvas.height = video.videoHeight;
+    sendCtx.drawImage(video, 0, 0);
+    sendCanvas.toBlob((blob) => {
+      if (!blob) { sending = false; return; }
+      blob.arrayBuffer().then(buf => {
+        ws.send(btoa(String.fromCharCode(...new Uint8Array(buf))));
+      });
+    }, "image/jpeg", 0.7);
+  }
+  requestAnimationFrame(sendLoop);
+}
+
+// ── Draw boxes ───────────────────────────────────────────────
+function drawDetections(dets) {
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const sx = overlay.width / video.videoWidth;
+  const sy = overlay.height / video.videoHeight;
+
+  for (const d of dets) {
+    const x = d.x1 * sx, y = d.y1 * sy;
+    const w = (d.x2 - d.x1) * sx, h = (d.y2 - d.y1) * sy;
+    const color = COLORS[d.class] || "#ffffff";
+
+    // Box
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, w, h);
+
+    // Label background
+    const label = `${EMOJI[d.class] || ""} ${d.class} ${d.conf}`;
+    ctx.font = "bold 16px 'Segoe UI', system-ui, sans-serif";
+    const tw = ctx.measureText(label).width + 12;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x, y - 28, tw, 26, 6);
+    ctx.fill();
+
+    // Label text
+    ctx.fillStyle = "#000";
+    ctx.fillText(label, x + 6, y - 10);
+  }
+}
+
+// ── HUD ──────────────────────────────────────────────────────
+function updateHUD(dets) {
+  const el = (id) => document.getElementById(id);
+  if (dets.length > 0) {
+    const best = dets.reduce((a, b) => a.conf > b.conf ? a : b);
+    el("detEmoji").textContent = EMOJI[best.class] || "?";
+    el("detClass").textContent = best.class;
+    el("detClass").style.color = COLORS[best.class] || "#fff";
+    el("detConf").textContent = (best.conf * 100).toFixed(0) + "%";
+  } else {
+    el("detEmoji").textContent = "—";
+    el("detClass").textContent = "Nothing";
+    el("detClass").style.color = "#8b949e";
+    el("detConf").textContent = "—";
+  }
+
+  // FPS
+  const now = performance.now();
+  const elapsed = now - lastFpsTime;
+  if (elapsed >= 1000) {
+    el("fps").textContent = Math.round((frameCount / elapsed) * 1000);
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+}
+
+// ── Kick off ─────────────────────────────────────────────────
+connectWS();
+</script>
+</body>
+</html>
